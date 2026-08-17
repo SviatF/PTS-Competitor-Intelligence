@@ -45,5 +45,8 @@ jobs:
       - name: Sync database schema
         run: npx prisma db push
 
+      - name: Seed projects and competitors
+        run: npm run seed
+
       - name: Scan competitors
         run: npm start
