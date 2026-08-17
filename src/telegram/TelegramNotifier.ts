@@ -12,7 +12,7 @@ function escapeHtml(value: string) {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function truncate(value: string | undefined, limit = 650) {
+function truncate(value: string | undefined, limit = 900) {
   if (!value) return '—';
   return value.length > limit ? `${value.slice(0, limit)}…` : value;
 }
@@ -20,6 +20,33 @@ function truncate(value: string | undefined, limit = 650) {
 function stringFromRaw(raw: Record<string, unknown>, key: string) {
   const value = raw[key];
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function inferGoal(ad: CollectedAd) {
+  const landing = ad.landingUrl?.toLowerCase() || '';
+  const cta = (ad.cta || '').toLowerCase();
+
+  if (
+    landing.includes('instagram.com/direct') ||
+    landing.includes('m.me/') ||
+    landing.includes('messenger.com') ||
+    cta.includes('message') ||
+    cta.includes('send message') ||
+    cta.includes('написати')
+  ) {
+    return 'Дірект / повідомлення';
+  }
+
+  if (ad.landingUrl) return 'Сайт';
+  if (ad.format === 'VIDEO') return 'Перегляди відео';
+  return 'Охоплення / взаємодія';
+}
+
+function formatLabel(format: CollectedAd['format']) {
+  if (format === 'IMAGE') return 'IMAGE';
+  if (format === 'VIDEO') return 'VIDEO';
+  if (format === 'CAROUSEL') return 'CAROUSEL';
+  return 'UNKNOWN';
 }
 
 export class TelegramNotifier {
@@ -34,28 +61,34 @@ export class TelegramNotifier {
   private buildCaption(ctx: NotificationContext) {
     const advertiser = stringFromRaw(ctx.ad.raw, 'advertiser');
     const startedAt = stringFromRaw(ctx.ad.raw, 'startedAt');
+    const divider = '____________________________';
 
-    return [
-      '🚨 <b>NEW COMPETITOR AD</b>',
-      '',
-      `<b>Project:</b> ${escapeHtml(ctx.projectName)}`,
-      `<b>Competitor:</b> ${escapeHtml(ctx.competitorName)}`,
-      advertiser ? `<b>Advertiser:</b> ${escapeHtml(advertiser)}` : '',
-      `<b>GEO:</b> ${escapeHtml(ctx.geo)}`,
-      `<b>Format:</b> ${ctx.ad.format || 'UNKNOWN'}`,
+    const lines = [
+      '❗ <b>НОВА РЕКЛАМА У КОНКУРЕНТІВ</b> ❗',
+      `<b>Проект:</b> ${escapeHtml(ctx.projectName)}`,
+      `<b>Конкурент:</b> ${escapeHtml(ctx.competitorName)}`,
+      divider,
+      advertiser ? `<b>FB-page:</b> ${escapeHtml(advertiser)}` : '<b>FB-page:</b> —',
+      `<b>ГЕО:</b> ${escapeHtml(ctx.geo)}`,
+      `<b>Формат:</b> ${formatLabel(ctx.ad.format)}`,
+      `<b>Ціль:</b> ${escapeHtml(inferGoal(ctx.ad))}`,
+      divider,
       ctx.ad.externalId ? `<b>Library ID:</b> ${escapeHtml(ctx.ad.externalId)}` : '',
-      startedAt ? `<b>Started:</b> ${escapeHtml(startedAt)}` : '',
+      startedAt ? `<b>Старт:</b> ${escapeHtml(startedAt)}` : '',
       '',
-      `<b>Text:</b>\n${escapeHtml(truncate(ctx.ad.primaryText))}`,
-    ]
-      .filter(Boolean)
-      .join('\n');
+      '<b>Опис:</b>',
+      escapeHtml(truncate(ctx.ad.primaryText)),
+      ctx.ad.landingUrl ? '' : undefined,
+      ctx.ad.landingUrl ? `<b>Лінк:</b> ${escapeHtml(ctx.ad.landingUrl)}` : undefined,
+    ];
+
+    return lines.filter((line): line is string => typeof line === 'string').join('\n');
   }
 
   private buildKeyboard(ctx: NotificationContext) {
     const row: Array<{ text: string; url: string }> = [];
-    if (ctx.ad.adLibraryUrl) row.push({ text: '🔎 Open Ad Library', url: ctx.ad.adLibraryUrl });
-    if (ctx.ad.landingUrl) row.push({ text: '🌐 Open Landing', url: ctx.ad.landingUrl });
+    if (ctx.ad.adLibraryUrl) row.push({ text: '🔎 Відкрити Ad Library', url: ctx.ad.adLibraryUrl });
+    if (ctx.ad.landingUrl) row.push({ text: '🌐 Відкрити сайт', url: ctx.ad.landingUrl });
     return row.length ? { inline_keyboard: [row] } : undefined;
   }
 
