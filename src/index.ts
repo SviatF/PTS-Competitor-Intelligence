@@ -23,6 +23,14 @@ async function guardedRun() {
 }
 
 async function main() {
+  if (env.RUN_ONCE) {
+    console.log('[app] GitHub Actions one-shot scan started');
+    await guardedRun();
+    console.log('[app] one-shot scan finished');
+    await db.$disconnect();
+    return;
+  }
+
   console.log(`[app] PTS Competitor Intelligence started; cron=${env.MONITOR_CRON}`);
   await guardedRun();
 
