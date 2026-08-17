@@ -117,6 +117,7 @@ async function extractCards(page: Page) {
         renderedWidth: number;
         renderedHeight: number;
         alt: string;
+        source: 'img' | 'srcset' | 'background';
       }>;
       videoUrls: string[];
       videoPosters: string[];
@@ -146,19 +147,65 @@ async function extractCards(page: Page) {
         .map((a) => a.href)
         .filter(Boolean);
 
-      const images = Array.from(card.querySelectorAll<HTMLImageElement>('img'))
-        .map((img) => {
-          const rect = img.getBoundingClientRect();
-          return {
-            url: img.currentSrc || img.src,
+      const images: Array<{
+        url: string;
+        naturalWidth: number;
+        naturalHeight: number;
+        renderedWidth: number;
+        renderedHeight: number;
+        alt: string;
+        source: 'img' | 'srcset' | 'background';
+      }> = [];
+
+      for (const img of Array.from(card.querySelectorAll<HTMLImageElement>('img'))) {
+        const rect = img.getBoundingClientRect();
+        const current = img.currentSrc || img.src;
+        if (current) {
+          images.push({
+            url: current,
             naturalWidth: img.naturalWidth || 0,
             naturalHeight: img.naturalHeight || 0,
             renderedWidth: Math.round(rect.width),
             renderedHeight: Math.round(rect.height),
             alt: img.alt || '',
-          };
-        })
-        .filter((image) => Boolean(image.url));
+            source: 'img',
+          });
+        }
+
+        if (img.srcset) {
+          for (const part of img.srcset.split(',')) {
+            const url = part.trim().split(/\s+/)[0];
+            if (!url) continue;
+            images.push({
+              url,
+              naturalWidth: img.naturalWidth || 0,
+              naturalHeight: img.naturalHeight || 0,
+              renderedWidth: Math.round(rect.width),
+              renderedHeight: Math.round(rect.height),
+              alt: img.alt || '',
+              source: 'srcset',
+            });
+          }
+        }
+      }
+
+      for (const el of Array.from(card.querySelectorAll<HTMLElement>('*'))) {
+        const style = getComputedStyle(el);
+        const bg = style.backgroundImage;
+        if (!bg || bg === 'none') continue;
+        const match = bg.match(/url\(["']?(https?:\/\/[^"')]+)["']?\)/i);
+        if (!match?.[1]) continue;
+        const rect = el.getBoundingClientRect();
+        images.push({
+          url: match[1],
+          naturalWidth: 0,
+          naturalHeight: 0,
+          renderedWidth: Math.round(rect.width),
+          renderedHeight: Math.round(rect.height),
+          alt: '',
+          source: 'background',
+        });
+      }
 
       const videos = Array.from(card.querySelectorAll<HTMLVideoElement>('video'));
       const videoUrls = videos.flatMap((video) => {
@@ -215,7 +262,8 @@ function pickCreativeUrl(card: Awaited<ReturnType<typeof extractCards>>[number])
 
   const rankedImages = card.images
     .filter((image) => /^https?:/i.test(image.url) && /fbcdn|fbsbx|cdninstagram/i.test(image.url))
-    .filter((image) => image.renderedWidth >= 180 && image.renderedHeight >= 120)
+    .filter((image) => image.renderedWidth >= 140 && image.renderedHeight >= 100)
+    .filter((image) => !/profile|avatar/i.test(image.alt))
     .sort((a, b) => {
       const renderedAreaA = a.renderedWidth * a.renderedHeight;
       const renderedAreaB = b.renderedWidth * b.renderedHeight;
