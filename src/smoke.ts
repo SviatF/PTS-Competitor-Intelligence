@@ -37,9 +37,7 @@ async function getWorkspaces(): Promise<Workspace[]> {
 
 async function reconcile(workspaceId: string, competitorId: string, ads: ParsedAd[]) {
   const response = await fetch(SCANNER_API, {
-    method: 'POST',
-    headers: authHeaders(),
-    body: JSON.stringify({ action: 'reconcile', workspaceId, competitorId, ads }),
+    method: 'POST', headers: authHeaders(), body: JSON.stringify({ action: 'reconcile', workspaceId, competitorId, ads }),
   });
   if (!response.ok) throw new Error(`scanner-api reconcile failed: ${response.status} ${await response.text()}`);
   return response.json() as Promise<{ events: Array<{ type: 'NEW' | 'REACTIVATED' | 'STOPPED'; ad: any }> }>;
@@ -47,6 +45,10 @@ async function reconcile(workspaceId: string, competitorId: string, ads: ParsedA
 
 function clean(value: string) {
   return value.replace(/\u200b/g, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function normalizeSearchText(value: string) {
+  return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').replace(/\s+/g, ' ').trim();
 }
 
 function queryFromUrl(sourceUrl: string, fallback?: string | null) {
@@ -82,12 +84,26 @@ function parseAdvertiser(cardText: string) {
   return sponsoredIndex > 0 ? lines[sponsoredIndex - 1] : '';
 }
 
-function advertiserMatches(advertiser: string, competitor: DbCompetitor) {
-  const normalizedAdvertiser = advertiser.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ');
+function advertiserMatches(cardText: string, advertiser: string, competitor: DbCompetitor) {
   const handle = queryFromUrl(competitor.source_url, competitor.query).toLowerCase();
-  const tokens = handle.split(/[._\-\s]+/).filter((token) => token.length >= 4 && !['agency', 'official', 'ukraine'].includes(token));
+  const display = (competitor.name || '').toLowerCase();
+  const ignored = new Set(['agency', 'official', 'ukraine', 'group', 'company', 'media']);
+  const tokens = [...new Set(`${handle} ${display}`.split(/[._\-\s]+/).map((x) => x.trim()).filter((token) => token.length >= 3 && !ignored.has(token)))];
   if (!tokens.length) return true;
-  return tokens.some((token) => normalizedAdvertiser.includes(token));
+
+  const advertiserText = normalizeSearchText(advertiser);
+  const fullCardText = normalizeSearchText(cardText);
+  const handleNormalized = normalizeSearchText(handle);
+  const displayNormalized = normalizeSearchText(display);
+
+  if (handleNormalized && (advertiserText.includes(handleNormalized) || fullCardText.includes(handleNormalized))) return true;
+  if (displayNormalized && (advertiserText.includes(displayNormalized) || fullCardText.includes(displayNormalized))) return true;
+
+  const advertiserHits = tokens.filter((token) => advertiserText.includes(token)).length;
+  const cardHits = tokens.filter((token) => fullCardText.includes(token)).length;
+  if (advertiserHits >= 1) return true;
+  if (tokens.length === 1) return cardHits === 1;
+  return cardHits >= Math.min(2, tokens.length);
 }
 
 function parsePrimaryText(cardText: string) {
@@ -248,8 +264,12 @@ async function main() {
           await page.waitForTimeout(7_000);
           await loadAllVisibleAds(page);
           const cards = await extractCards(page);
-          const matched = cards.map((card) => ({ card, advertiser: parseAdvertiser(card.text) })).filter(({ advertiser }) => advertiserMatches(advertiser, competitor));
+          const parsed = cards.map((card) => ({ card, advertiser: parseAdvertiser(card.text) }));
+          const matched = parsed.filter(({ card, advertiser }) => advertiserMatches(card.text, advertiser, competitor));
           console.log(`[scanner] raw=${cards.length} matched=${matched.length}`);
+          if (cards.length && !matched.length) {
+            console.log(`[scanner] sample advertisers=${JSON.stringify(parsed.slice(0, 8).map((x) => x.advertiser))}`);
+          }
 
           const ads: ParsedAd[] = matched.map(({ card, advertiser }) => {
             const creative = pickCreativeUrl(card);
