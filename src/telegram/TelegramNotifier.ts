@@ -59,7 +59,7 @@ export class TelegramNotifier {
     return row.length ? { inline_keyboard: [row] } : undefined;
   }
 
-  private async send(method: string, body: Record<string, unknown>) {
+  private async sendJson(method: string, body: Record<string, unknown>) {
     const response = await fetch(this.apiUrl(method), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -71,52 +71,86 @@ export class TelegramNotifier {
     }
   }
 
+  private async downloadMedia(url: string) {
+    const response = await fetch(url, {
+      headers: {
+        'user-agent':
+          'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0 Safari/537.36',
+        referer: 'https://www.facebook.com/',
+      },
+      redirect: 'follow',
+    });
+
+    if (!response.ok) {
+      throw new Error(`Media download failed: ${response.status}`);
+    }
+
+    const bytes = await response.arrayBuffer();
+    const contentType = response.headers.get('content-type') || 'application/octet-stream';
+    return { bytes, contentType };
+  }
+
+  private async uploadMedia(
+    method: 'sendPhoto' | 'sendVideo',
+    field: 'photo' | 'video',
+    ctx: NotificationContext,
+  ) {
+    if (!ctx.ad.creativeUrl) throw new Error('Missing creative URL');
+
+    const { bytes, contentType } = await this.downloadMedia(ctx.ad.creativeUrl);
+    const extension = method === 'sendVideo' ? 'mp4' : contentType.includes('png') ? 'png' : 'jpg';
+    const filename = `competitor-${ctx.ad.externalId || Date.now()}.${extension}`;
+
+    const form = new FormData();
+    form.append('chat_id', env.TELEGRAM_CHAT_ID!);
+    form.append(field, new Blob([bytes], { type: contentType }), filename);
+    form.append('caption', this.buildCaption(ctx));
+    form.append('parse_mode', 'HTML');
+    if (method === 'sendVideo') form.append('supports_streaming', 'true');
+
+    const keyboard = this.buildKeyboard(ctx);
+    if (keyboard) form.append('reply_markup', JSON.stringify(keyboard));
+
+    const response = await fetch(this.apiUrl(method), {
+      method: 'POST',
+      body: form,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Telegram ${method} upload failed: ${response.status} ${await response.text()}`);
+    }
+  }
+
   async sendNewAd(ctx: NotificationContext) {
     if (!this.isConfigured()) {
       console.log('[telegram] skipped: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not configured');
       return;
     }
 
-    const caption = this.buildCaption(ctx);
-    const replyMarkup = this.buildKeyboard(ctx);
-
     if (ctx.ad.creativeUrl && ctx.ad.format === 'IMAGE') {
       try {
-        await this.send('sendPhoto', {
-          chat_id: env.TELEGRAM_CHAT_ID,
-          photo: ctx.ad.creativeUrl,
-          caption,
-          parse_mode: 'HTML',
-          reply_markup: replyMarkup,
-        });
+        await this.uploadMedia('sendPhoto', 'photo', ctx);
         return;
       } catch (error) {
-        console.warn('[telegram] sendPhoto failed, falling back to text', error);
+        console.warn('[telegram] photo upload failed, falling back to text', error);
       }
     }
 
     if (ctx.ad.creativeUrl && ctx.ad.format === 'VIDEO') {
       try {
-        await this.send('sendVideo', {
-          chat_id: env.TELEGRAM_CHAT_ID,
-          video: ctx.ad.creativeUrl,
-          caption,
-          parse_mode: 'HTML',
-          supports_streaming: true,
-          reply_markup: replyMarkup,
-        });
+        await this.uploadMedia('sendVideo', 'video', ctx);
         return;
       } catch (error) {
-        console.warn('[telegram] sendVideo failed, falling back to text', error);
+        console.warn('[telegram] video upload failed, falling back to text', error);
       }
     }
 
-    await this.send('sendMessage', {
+    await this.sendJson('sendMessage', {
       chat_id: env.TELEGRAM_CHAT_ID,
-      text: caption,
+      text: this.buildCaption(ctx),
       parse_mode: 'HTML',
       disable_web_page_preview: true,
-      reply_markup: replyMarkup,
+      reply_markup: this.buildKeyboard(ctx),
     });
   }
 }
