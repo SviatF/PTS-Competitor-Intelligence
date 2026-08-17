@@ -43,3 +43,5 @@ jobs:
           path: artifacts/meta-extract
           if-no-files-found: ignore
           retention-days: 3
+
+# manual trigger marker
