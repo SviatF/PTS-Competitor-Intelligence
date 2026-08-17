@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import type { AdCollector } from '../domain/ad.js';
 import { db } from '../database/client.js';
 import { TelegramNotifier } from '../telegram/TelegramNotifier.js';
@@ -22,6 +23,7 @@ export class MonitorService {
         console.log(`[monitor] ${competitor.name}: ${collected.length} ads collected`);
 
         for (const ad of collected) {
+          const rawJson = ad.raw as Prisma.InputJsonValue;
           const existing = await db.ad.findUnique({
             where: {
               competitorId_source_fingerprint: {
@@ -39,7 +41,7 @@ export class MonitorService {
                 lastSeenAt: new Date(),
                 landingUrl: ad.landingUrl,
                 creativeUrl: ad.creativeUrl,
-                rawJson: ad.raw,
+                rawJson,
               },
             });
             continue;
@@ -58,13 +60,13 @@ export class MonitorService {
               landingUrl: ad.landingUrl,
               creativeUrl: ad.creativeUrl,
               adLibraryUrl: ad.adLibraryUrl,
-              rawJson: ad.raw,
-              detections: { create: { status: 'NEW' } },
+              rawJson,
             },
-            include: { detections: true },
           });
 
-          const detection = created.detections[0];
+          const detection = await db.detection.create({
+            data: { adId: created.id, status: 'NEW' },
+          });
 
           try {
             await this.notifier.sendNewAd({
@@ -74,7 +76,7 @@ export class MonitorService {
               ad,
             });
 
-            if (detection && this.notifier.isConfigured()) {
+            if (this.notifier.isConfigured()) {
               await db.detection.update({
                 where: { id: detection.id },
                 data: { status: 'NOTIFIED', notifiedAt: new Date() },
