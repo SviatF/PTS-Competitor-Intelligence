@@ -64,12 +64,7 @@ function parsePrimaryText(cardText: string) {
   if (sponsoredIndex < 0) return clean(cardText).slice(0, 5000);
 
   let text = cardText.slice(sponsoredIndex).replace(/^\n?Sponsored\s*\n/i, '');
-  const stopMarkers = [
-    '\nLow impression count',
-    '\nImpressions:',
-    '\nOpen Dropdown',
-    '\nSee ad details',
-  ];
+  const stopMarkers = ['\nLow impression count', '\nImpressions:', '\nOpen Dropdown', '\nSee ad details'];
 
   for (const marker of stopMarkers) {
     const index = text.indexOf(marker);
@@ -147,7 +142,11 @@ async function extractCards(page: Page) {
         .map((img) => img.currentSrc || img.src)
         .filter(Boolean);
       const videos = Array.from(card.querySelectorAll<HTMLVideoElement>('video'));
-      const videoUrls = videos.map((video) => video.currentSrc || video.src).filter(Boolean);
+      const videoUrls = videos.flatMap((video) => {
+        const direct = [video.src, video.currentSrc];
+        const sources = Array.from(video.querySelectorAll<HTMLSourceElement>('source[src]')).map((source) => source.src);
+        return [...direct, ...sources].filter(Boolean);
+      });
       const videoPosters = videos.map((video) => video.poster).filter(Boolean);
 
       cards.push({
@@ -169,12 +168,7 @@ function cleanLandingUrl(href: string) {
     const url = new URL(href);
     const host = url.hostname.toLowerCase();
 
-    if (host === 'l.facebook.com' && url.pathname === '/l.php') {
-      const target = url.searchParams.get('u');
-      if (target) return decodeURIComponent(target);
-    }
-
-    if (host === 'lm.facebook.com' && url.pathname === '/l.php') {
+    if ((host === 'l.facebook.com' || host === 'lm.facebook.com') && url.pathname === '/l.php') {
       const target = url.searchParams.get('u');
       if (target) return decodeURIComponent(target);
     }
@@ -197,11 +191,8 @@ function pickLandingUrl(hrefs: string[]) {
 }
 
 function pickCreativeUrl(card: Awaited<ReturnType<typeof extractCards>>[number]) {
-  const video = card.videoUrls.find((url) => /^https?:/i.test(url));
+  const video = card.videoUrls.find((url) => /^https?:/i.test(url) && !/^blob:/i.test(url));
   if (video) return { url: video, format: 'VIDEO' as const };
-
-  const poster = card.videoPosters.find((url) => /^https?:/i.test(url));
-  if (poster) return { url: poster, format: 'VIDEO' as const };
 
   const image = card.imageUrls.find((url) => /^https?:/i.test(url) && /fbcdn|fbsbx|cdninstagram/i.test(url));
   if (image) return { url: image, format: 'IMAGE' as const };
@@ -242,9 +233,7 @@ async function main() {
           .map((card) => ({ card, advertiser: parseAdvertiser(card.text) }))
           .filter(({ advertiser }) => competitor.advertiserPattern.test(advertiser));
 
-        console.log(
-          `[extractor] status=${response?.status() ?? 'n/a'} rawCards=${cards.length} accepted=${accepted.length}`,
-        );
+        console.log(`[extractor] status=${response?.status() ?? 'n/a'} rawCards=${cards.length} accepted=${accepted.length}`);
 
         const output: unknown[] = [];
 
@@ -292,9 +281,7 @@ async function main() {
             adLibraryUrl,
           });
 
-          console.log(
-            `[extractor] ad=${card.libraryId} advertiser=${JSON.stringify(advertiser)} format=${ad.format} started=${JSON.stringify(startedAt)}`,
-          );
+          console.log(`[extractor] ad=${card.libraryId} advertiser=${JSON.stringify(advertiser)} format=${ad.format} started=${JSON.stringify(startedAt)}`);
 
           await notifier.sendNewAd({
             projectName: 'The Camp',
@@ -307,22 +294,11 @@ async function main() {
         }
 
         grandTotal += output.length;
-        await writeFile(
-          `artifacts/meta-extract/${competitor.slug}.json`,
-          JSON.stringify(output, null, 2),
-          'utf8',
-        );
-        await page.screenshot({
-          path: `artifacts/meta-extract/${competitor.slug}.png`,
-          fullPage: true,
-        });
+        await writeFile(`artifacts/meta-extract/${competitor.slug}.json`, JSON.stringify(output, null, 2), 'utf8');
+        await page.screenshot({ path: `artifacts/meta-extract/${competitor.slug}.png`, fullPage: true });
       } catch (error) {
         console.error(`[extractor] ${competitor.name} failed`, error);
-        await writeFile(
-          `artifacts/meta-extract/${competitor.slug}-error.txt`,
-          String(error),
-          'utf8',
-        );
+        await writeFile(`artifacts/meta-extract/${competitor.slug}-error.txt`, String(error), 'utf8');
       } finally {
         await page.close();
       }
