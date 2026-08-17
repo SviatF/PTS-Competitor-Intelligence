@@ -164,15 +164,36 @@ async function extractCards(page: Page) {
   });
 }
 
-function pickLandingUrl(hrefs: string[]) {
-  return hrefs.find((href) => {
-    try {
-      const url = new URL(href);
-      return !['facebook.com', 'www.facebook.com', 'meta.com', 'www.meta.com'].includes(url.hostname);
-    } catch {
-      return false;
+function cleanLandingUrl(href: string) {
+  try {
+    const url = new URL(href);
+    const host = url.hostname.toLowerCase();
+
+    if (host === 'l.facebook.com' && url.pathname === '/l.php') {
+      const target = url.searchParams.get('u');
+      if (target) return decodeURIComponent(target);
     }
-  });
+
+    if (host === 'lm.facebook.com' && url.pathname === '/l.php') {
+      const target = url.searchParams.get('u');
+      if (target) return decodeURIComponent(target);
+    }
+
+    if (host === 'facebook.com' || host.endsWith('.facebook.com')) return undefined;
+    if (host === 'meta.com' || host.endsWith('.meta.com')) return undefined;
+
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function pickLandingUrl(hrefs: string[]) {
+  for (const href of hrefs) {
+    const cleaned = cleanLandingUrl(href);
+    if (cleaned) return cleaned;
+  }
+  return undefined;
 }
 
 function pickCreativeUrl(card: Awaited<ReturnType<typeof extractCards>>[number]) {
@@ -202,6 +223,7 @@ async function main() {
   });
 
   let grandTotal = 0;
+  const sentLibraryIds = new Set<string>();
 
   try {
     for (const competitor of competitors) {
@@ -227,6 +249,12 @@ async function main() {
         const output: unknown[] = [];
 
         for (const { card, advertiser } of accepted) {
+          if (sentLibraryIds.has(card.libraryId)) {
+            console.log(`[extractor] skip duplicate Library ID ${card.libraryId}`);
+            continue;
+          }
+          sentLibraryIds.add(card.libraryId);
+
           const creative = pickCreativeUrl(card);
           const landingUrl = pickLandingUrl(card.hrefs);
           const primaryText = parsePrimaryText(card.text);
@@ -278,7 +306,7 @@ async function main() {
           await new Promise((resolve) => setTimeout(resolve, 900));
         }
 
-        grandTotal += accepted.length;
+        grandTotal += output.length;
         await writeFile(
           `artifacts/meta-extract/${competitor.slug}.json`,
           JSON.stringify(output, null, 2),
