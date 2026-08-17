@@ -7,6 +7,11 @@ jobs:
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      META_HEADLESS: 'true'
+      DATABASE_URL: 'postgresql://unused:unused@localhost:5432/unused'
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
     steps:
       - name: Checkout
@@ -23,14 +28,14 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Run Meta smoke diagnostics
+      - name: Extract live Meta ads
         run: npx tsx src/smoke.ts
 
-      - name: Upload diagnostics
+      - name: Upload extracted ads
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: meta-smoke-diagnostics
-          path: artifacts/meta-smoke
+          name: meta-live-extract
+          path: artifacts/meta-extract
           if-no-files-found: warn
           retention-days: 7
