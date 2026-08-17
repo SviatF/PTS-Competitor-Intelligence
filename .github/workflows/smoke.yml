@@ -1,12 +1,14 @@
-name: Meta Smoke Test
+name: Meta Competitor Scanner
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '*/5 * * * *'
 
 jobs:
-  smoke:
+  scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       META_HEADLESS: 'true'
       DATABASE_URL: 'postgresql://unused:unused@localhost:5432/unused'
@@ -28,7 +30,7 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Extract live Meta ads
+      - name: Scan configured competitors
         run: npx tsx src/smoke.ts
 
       - name: Upload extracted ads
@@ -37,5 +39,5 @@ jobs:
         with:
           name: meta-live-extract
           path: artifacts/meta-extract
-          if-no-files-found: warn
-          retention-days: 7
+          if-no-files-found: ignore
+          retention-days: 3
