@@ -1,0 +1,67 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Project {
+  id          String       @id @default(cuid())
+  name        String
+  geo         String
+  active      Boolean      @default(true)
+  competitors Competitor[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model Competitor {
+  id               String    @id @default(cuid())
+  projectId        String
+  project          Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name             String
+  website          String?
+  metaAdLibraryUrl String?
+  active           Boolean   @default(true)
+  ads              Ad[]
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([projectId, active])
+}
+
+model Ad {
+  id            String      @id @default(cuid())
+  competitorId  String
+  competitor    Competitor  @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  source        String
+  externalId    String?
+  fingerprint   String
+  format        String?
+  primaryText   String?
+  headline      String?
+  cta           String?
+  landingUrl    String?
+  creativeUrl   String?
+  adLibraryUrl  String?
+  firstSeenAt   DateTime    @default(now())
+  lastSeenAt    DateTime    @default(now())
+  rawJson       Json?
+  detections    Detection[]
+
+  @@unique([competitorId, source, fingerprint])
+  @@index([competitorId, source, lastSeenAt])
+}
+
+model Detection {
+  id         String   @id @default(cuid())
+  adId       String
+  ad         Ad       @relation(fields: [adId], references: [id], onDelete: Cascade)
+  detectedAt DateTime @default(now())
+  notifiedAt DateTime?
+  status     String   @default("NEW")
+
+  @@index([status, detectedAt])
+}
