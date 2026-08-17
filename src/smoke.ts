@@ -110,7 +110,14 @@ async function extractCards(page: Page) {
       libraryId: string;
       text: string;
       hrefs: string[];
-      imageUrls: string[];
+      images: Array<{
+        url: string;
+        naturalWidth: number;
+        naturalHeight: number;
+        renderedWidth: number;
+        renderedHeight: number;
+        alt: string;
+      }>;
       videoUrls: string[];
       videoPosters: string[];
     }> = [];
@@ -138,9 +145,21 @@ async function extractCards(page: Page) {
       const hrefs = Array.from(card.querySelectorAll<HTMLAnchorElement>('a[href]'))
         .map((a) => a.href)
         .filter(Boolean);
-      const imageUrls = Array.from(card.querySelectorAll<HTMLImageElement>('img'))
-        .map((img) => img.currentSrc || img.src)
-        .filter(Boolean);
+
+      const images = Array.from(card.querySelectorAll<HTMLImageElement>('img'))
+        .map((img) => {
+          const rect = img.getBoundingClientRect();
+          return {
+            url: img.currentSrc || img.src,
+            naturalWidth: img.naturalWidth || 0,
+            naturalHeight: img.naturalHeight || 0,
+            renderedWidth: Math.round(rect.width),
+            renderedHeight: Math.round(rect.height),
+            alt: img.alt || '',
+          };
+        })
+        .filter((image) => Boolean(image.url));
+
       const videos = Array.from(card.querySelectorAll<HTMLVideoElement>('video'));
       const videoUrls = videos.flatMap((video) => {
         const direct = [video.src, video.currentSrc];
@@ -153,7 +172,7 @@ async function extractCards(page: Page) {
         libraryId,
         text: card.innerText,
         hrefs: [...new Set(hrefs)],
-        imageUrls: [...new Set(imageUrls)],
+        images,
         videoUrls: [...new Set(videoUrls)],
         videoPosters: [...new Set(videoPosters)],
       });
@@ -194,8 +213,21 @@ function pickCreativeUrl(card: Awaited<ReturnType<typeof extractCards>>[number])
   const video = card.videoUrls.find((url) => /^https?:/i.test(url) && !/^blob:/i.test(url));
   if (video) return { url: video, format: 'VIDEO' as const };
 
-  const image = card.imageUrls.find((url) => /^https?:/i.test(url) && /fbcdn|fbsbx|cdninstagram/i.test(url));
-  if (image) return { url: image, format: 'IMAGE' as const };
+  const rankedImages = card.images
+    .filter((image) => /^https?:/i.test(image.url) && /fbcdn|fbsbx|cdninstagram/i.test(image.url))
+    .filter((image) => image.renderedWidth >= 180 && image.renderedHeight >= 120)
+    .sort((a, b) => {
+      const renderedAreaA = a.renderedWidth * a.renderedHeight;
+      const renderedAreaB = b.renderedWidth * b.renderedHeight;
+      if (renderedAreaB !== renderedAreaA) return renderedAreaB - renderedAreaA;
+
+      const naturalAreaA = a.naturalWidth * a.naturalHeight;
+      const naturalAreaB = b.naturalWidth * b.naturalHeight;
+      return naturalAreaB - naturalAreaA;
+    });
+
+  const image = rankedImages[0];
+  if (image) return { url: image.url, format: 'IMAGE' as const };
 
   return { url: undefined, format: 'UNKNOWN' as const };
 }
@@ -264,7 +296,7 @@ async function main() {
               startedAt,
               cardText: card.text,
               hrefs: card.hrefs,
-              imageUrls: card.imageUrls,
+              images: card.images,
               videoUrls: card.videoUrls,
               videoPosters: card.videoPosters,
             },
@@ -279,6 +311,7 @@ async function main() {
             landingUrl,
             creativeUrl: creative.url,
             adLibraryUrl,
+            images: card.images,
           });
 
           console.log(`[extractor] ad=${card.libraryId} advertiser=${JSON.stringify(advertiser)} format=${ad.format} started=${JSON.stringify(startedAt)}`);
