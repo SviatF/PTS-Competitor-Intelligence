@@ -12,9 +12,9 @@ function escapeHtml(value: string) {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function truncate(value: string | undefined, limit = 900) {
+function truncate(value: string | undefined, limit = 300) {
   if (!value) return '—';
-  return value.length > limit ? `${value.slice(0, limit)}…` : value;
+  return value.length > limit ? `${value.slice(0, limit).trimEnd()}…` : value;
 }
 
 function stringFromRaw(raw: Record<string, unknown>, key: string) {
@@ -77,7 +77,7 @@ export class TelegramNotifier {
       startedAt ? `<b>Старт:</b> ${escapeHtml(startedAt)}` : '',
       '',
       '<b>Опис:</b>',
-      escapeHtml(truncate(ctx.ad.primaryText)),
+      escapeHtml(truncate(ctx.ad.primaryText, 300)),
       ctx.ad.landingUrl ? '' : undefined,
       ctx.ad.landingUrl ? `<b>Лінк:</b> ${escapeHtml(ctx.ad.landingUrl)}` : undefined,
     ];
@@ -110,6 +110,7 @@ export class TelegramNotifier {
         'user-agent':
           'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0 Safari/537.36',
         referer: 'https://www.facebook.com/',
+        accept: '*/*',
       },
       redirect: 'follow',
     });
@@ -120,6 +121,7 @@ export class TelegramNotifier {
 
     const bytes = await response.arrayBuffer();
     const contentType = response.headers.get('content-type') || 'application/octet-stream';
+    if (!bytes.byteLength) throw new Error('Media download returned empty body');
     return { bytes, contentType };
   }
 
@@ -154,6 +156,19 @@ export class TelegramNotifier {
     }
   }
 
+  private async sendMediaByUrl(method: 'sendPhoto' | 'sendVideo', field: 'photo' | 'video', ctx: NotificationContext) {
+    if (!ctx.ad.creativeUrl) throw new Error('Missing creative URL');
+
+    await this.sendJson(method, {
+      chat_id: env.TELEGRAM_CHAT_ID,
+      [field]: ctx.ad.creativeUrl,
+      caption: this.buildCaption(ctx),
+      parse_mode: 'HTML',
+      ...(method === 'sendVideo' ? { supports_streaming: true } : {}),
+      reply_markup: this.buildKeyboard(ctx),
+    });
+  }
+
   async sendNewAd(ctx: NotificationContext) {
     if (!this.isConfigured()) {
       console.log('[telegram] skipped: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not configured');
@@ -164,8 +179,14 @@ export class TelegramNotifier {
       try {
         await this.uploadMedia('sendPhoto', 'photo', ctx);
         return;
-      } catch (error) {
-        console.warn('[telegram] photo upload failed, falling back to text', error);
+      } catch (uploadError) {
+        console.warn('[telegram] photo upload failed, trying direct URL', uploadError);
+        try {
+          await this.sendMediaByUrl('sendPhoto', 'photo', ctx);
+          return;
+        } catch (urlError) {
+          console.warn('[telegram] direct photo send failed, falling back to text', urlError);
+        }
       }
     }
 
@@ -173,8 +194,14 @@ export class TelegramNotifier {
       try {
         await this.uploadMedia('sendVideo', 'video', ctx);
         return;
-      } catch (error) {
-        console.warn('[telegram] video upload failed, falling back to text', error);
+      } catch (uploadError) {
+        console.warn('[telegram] video upload failed, trying direct URL', uploadError);
+        try {
+          await this.sendMediaByUrl('sendVideo', 'video', ctx);
+          return;
+        } catch (urlError) {
+          console.warn('[telegram] direct video send failed, falling back to text', urlError);
+        }
       }
     }
 
