@@ -23,22 +23,15 @@ function stringFromRaw(raw: Record<string, unknown>, key: string) {
 }
 
 function inferGoal(ad: CollectedAd) {
-  const landing = ad.landingUrl?.toLowerCase() || '';
+  const destinationType = stringFromRaw(ad.raw, 'destinationType');
+  if (destinationType === 'MESSAGES') return 'Дірект / повідомлення';
+  if (destinationType === 'WHATSAPP') return 'WhatsApp';
+  if (destinationType === 'LEAD_FORM') return 'Lead Form';
+  if (destinationType === 'WEBSITE') return 'Сайт';
+
   const cta = (ad.cta || '').toLowerCase();
-
-  if (
-    landing.includes('instagram.com/direct') ||
-    landing.includes('m.me/') ||
-    landing.includes('messenger.com') ||
-    cta.includes('message') ||
-    cta.includes('send message') ||
-    cta.includes('написати')
-  ) {
-    return 'Дірект / повідомлення';
-  }
-
-  if (ad.landingUrl) return 'Сайт';
-  if (ad.format === 'VIDEO') return 'Перегляди відео';
+  if (cta.includes('message') || cta.includes('повідомлення')) return 'Дірект / повідомлення';
+  if (ad.format === 'VIDEO') return 'Перегляди відео / взаємодія';
   return 'Охоплення / взаємодія';
 }
 
@@ -72,6 +65,7 @@ export class TelegramNotifier {
       `<b>ГЕО:</b> ${escapeHtml(ctx.geo)}`,
       `<b>Формат:</b> ${formatLabel(ctx.ad.format)}`,
       `<b>Ціль:</b> ${escapeHtml(inferGoal(ctx.ad))}`,
+      `<b>CTA:</b> ${ctx.ad.cta ? escapeHtml(ctx.ad.cta) : '—'}`,
       divider,
       ctx.ad.externalId ? `<b>Library ID:</b> ${escapeHtml(ctx.ad.externalId)}` : '',
       startedAt ? `<b>Старт:</b> ${escapeHtml(startedAt)}` : '',
@@ -98,67 +92,44 @@ export class TelegramNotifier {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
-
-    if (!response.ok) {
-      throw new Error(`Telegram ${method} failed: ${response.status} ${await response.text()}`);
-    }
+    if (!response.ok) throw new Error(`Telegram ${method} failed: ${response.status} ${await response.text()}`);
   }
 
   private async downloadMedia(url: string) {
     const response = await fetch(url, {
       headers: {
-        'user-agent':
-          'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0 Safari/537.36',
+        'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0 Safari/537.36',
         referer: 'https://www.facebook.com/',
         accept: '*/*',
       },
       redirect: 'follow',
     });
-
-    if (!response.ok) {
-      throw new Error(`Media download failed: ${response.status}`);
-    }
-
+    if (!response.ok) throw new Error(`Media download failed: ${response.status}`);
     const bytes = await response.arrayBuffer();
     const contentType = response.headers.get('content-type') || 'application/octet-stream';
     if (!bytes.byteLength) throw new Error('Media download returned empty body');
     return { bytes, contentType };
   }
 
-  private async uploadMedia(
-    method: 'sendPhoto' | 'sendVideo',
-    field: 'photo' | 'video',
-    ctx: NotificationContext,
-  ) {
+  private async uploadMedia(method: 'sendPhoto' | 'sendVideo', field: 'photo' | 'video', ctx: NotificationContext) {
     if (!ctx.ad.creativeUrl) throw new Error('Missing creative URL');
-
     const { bytes, contentType } = await this.downloadMedia(ctx.ad.creativeUrl);
     const extension = method === 'sendVideo' ? 'mp4' : contentType.includes('png') ? 'png' : 'jpg';
     const filename = `competitor-${ctx.ad.externalId || Date.now()}.${extension}`;
-
     const form = new FormData();
     form.append('chat_id', env.TELEGRAM_CHAT_ID!);
     form.append(field, new Blob([bytes], { type: contentType }), filename);
     form.append('caption', this.buildCaption(ctx));
     form.append('parse_mode', 'HTML');
     if (method === 'sendVideo') form.append('supports_streaming', 'true');
-
     const keyboard = this.buildKeyboard(ctx);
     if (keyboard) form.append('reply_markup', JSON.stringify(keyboard));
-
-    const response = await fetch(this.apiUrl(method), {
-      method: 'POST',
-      body: form,
-    });
-
-    if (!response.ok) {
-      throw new Error(`Telegram ${method} upload failed: ${response.status} ${await response.text()}`);
-    }
+    const response = await fetch(this.apiUrl(method), { method: 'POST', body: form });
+    if (!response.ok) throw new Error(`Telegram ${method} upload failed: ${response.status} ${await response.text()}`);
   }
 
   private async sendMediaByUrl(method: 'sendPhoto' | 'sendVideo', field: 'photo' | 'video', ctx: NotificationContext) {
     if (!ctx.ad.creativeUrl) throw new Error('Missing creative URL');
-
     await this.sendJson(method, {
       chat_id: env.TELEGRAM_CHAT_ID,
       [field]: ctx.ad.creativeUrl,
@@ -176,32 +147,20 @@ export class TelegramNotifier {
     }
 
     if (ctx.ad.creativeUrl && ctx.ad.format === 'IMAGE') {
-      try {
-        await this.uploadMedia('sendPhoto', 'photo', ctx);
-        return;
-      } catch (uploadError) {
+      try { await this.uploadMedia('sendPhoto', 'photo', ctx); return; }
+      catch (uploadError) {
         console.warn('[telegram] photo upload failed, trying direct URL', uploadError);
-        try {
-          await this.sendMediaByUrl('sendPhoto', 'photo', ctx);
-          return;
-        } catch (urlError) {
-          console.warn('[telegram] direct photo send failed, falling back to text', urlError);
-        }
+        try { await this.sendMediaByUrl('sendPhoto', 'photo', ctx); return; }
+        catch (urlError) { console.warn('[telegram] direct photo send failed, falling back to text', urlError); }
       }
     }
 
     if (ctx.ad.creativeUrl && ctx.ad.format === 'VIDEO') {
-      try {
-        await this.uploadMedia('sendVideo', 'video', ctx);
-        return;
-      } catch (uploadError) {
+      try { await this.uploadMedia('sendVideo', 'video', ctx); return; }
+      catch (uploadError) {
         console.warn('[telegram] video upload failed, trying direct URL', uploadError);
-        try {
-          await this.sendMediaByUrl('sendVideo', 'video', ctx);
-          return;
-        } catch (urlError) {
-          console.warn('[telegram] direct video send failed, falling back to text', urlError);
-        }
+        try { await this.sendMediaByUrl('sendVideo', 'video', ctx); return; }
+        catch (urlError) { console.warn('[telegram] direct video send failed, falling back to text', urlError); }
       }
     }
 
