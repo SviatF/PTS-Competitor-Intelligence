@@ -5,6 +5,8 @@ type NotificationContext = {
   projectName: string;
   geo: string;
   competitorName: string;
+  chatId?: string | number;
+  eventType?: 'NEW' | 'REACTIVATED';
   ad: CollectedAd;
 };
 
@@ -28,7 +30,6 @@ function inferGoal(ad: CollectedAd) {
   if (destinationType === 'WHATSAPP') return 'WhatsApp';
   if (destinationType === 'LEAD_FORM') return 'Lead Form';
   if (destinationType === 'WEBSITE') return 'Сайт';
-
   const cta = (ad.cta || '').toLowerCase();
   if (cta.includes('message') || cta.includes('повідомлення')) return 'Дірект / повідомлення';
   if (ad.format === 'VIDEO') return 'Перегляди відео / взаємодія';
@@ -44,20 +45,29 @@ function formatLabel(format: CollectedAd['format']) {
 
 export class TelegramNotifier {
   isConfigured() {
-    return Boolean(env.TELEGRAM_BOT_TOKEN && env.TELEGRAM_CHAT_ID);
+    return Boolean(env.TELEGRAM_BOT_TOKEN);
   }
 
   private apiUrl(method: string) {
     return `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`;
   }
 
+  private resolveChatId(ctx: NotificationContext) {
+    const chatId = ctx.chatId ?? env.TELEGRAM_CHAT_ID;
+    if (!chatId) throw new Error('Missing Telegram chat id');
+    return String(chatId);
+  }
+
   private buildCaption(ctx: NotificationContext) {
     const advertiser = stringFromRaw(ctx.ad.raw, 'advertiser');
     const startedAt = stringFromRaw(ctx.ad.raw, 'startedAt');
     const divider = '____________________________';
+    const title = ctx.eventType === 'REACTIVATED'
+      ? '♻️ <b>РЕКЛАМУ КОНКУРЕНТА ЗАПУЩЕНО ЗНОВУ</b>'
+      : '❗ <b>НОВА РЕКЛАМА У КОНКУРЕНТІВ</b> ❗';
 
-    const lines = [
-      '❗ <b>НОВА РЕКЛАМА У КОНКУРЕНТІВ</b> ❗',
+    return [
+      title,
       `<b>Проект:</b> ${escapeHtml(ctx.projectName)}`,
       `<b>Конкурент:</b> ${escapeHtml(ctx.competitorName)}`,
       divider,
@@ -74,9 +84,7 @@ export class TelegramNotifier {
       escapeHtml(truncate(ctx.ad.primaryText, 300)),
       ctx.ad.landingUrl ? '' : undefined,
       ctx.ad.landingUrl ? `<b>Лінк:</b> ${escapeHtml(ctx.ad.landingUrl)}` : undefined,
-    ];
-
-    return lines.filter((line): line is string => typeof line === 'string').join('\n');
+    ].filter((line): line is string => typeof line === 'string').join('\n');
   }
 
   private buildKeyboard(ctx: NotificationContext) {
@@ -115,10 +123,9 @@ export class TelegramNotifier {
     if (!ctx.ad.creativeUrl) throw new Error('Missing creative URL');
     const { bytes, contentType } = await this.downloadMedia(ctx.ad.creativeUrl);
     const extension = method === 'sendVideo' ? 'mp4' : contentType.includes('png') ? 'png' : 'jpg';
-    const filename = `competitor-${ctx.ad.externalId || Date.now()}.${extension}`;
     const form = new FormData();
-    form.append('chat_id', env.TELEGRAM_CHAT_ID!);
-    form.append(field, new Blob([bytes], { type: contentType }), filename);
+    form.append('chat_id', this.resolveChatId(ctx));
+    form.append(field, new Blob([bytes], { type: contentType }), `competitor-${ctx.ad.externalId || Date.now()}.${extension}`);
     form.append('caption', this.buildCaption(ctx));
     form.append('parse_mode', 'HTML');
     if (method === 'sendVideo') form.append('supports_streaming', 'true');
@@ -131,7 +138,7 @@ export class TelegramNotifier {
   private async sendMediaByUrl(method: 'sendPhoto' | 'sendVideo', field: 'photo' | 'video', ctx: NotificationContext) {
     if (!ctx.ad.creativeUrl) throw new Error('Missing creative URL');
     await this.sendJson(method, {
-      chat_id: env.TELEGRAM_CHAT_ID,
+      chat_id: this.resolveChatId(ctx),
       [field]: ctx.ad.creativeUrl,
       caption: this.buildCaption(ctx),
       parse_mode: 'HTML',
@@ -141,35 +148,36 @@ export class TelegramNotifier {
   }
 
   async sendNewAd(ctx: NotificationContext) {
-    if (!this.isConfigured()) {
-      console.log('[telegram] skipped: TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not configured');
-      return;
-    }
-
+    if (!this.isConfigured()) return;
     if (ctx.ad.creativeUrl && ctx.ad.format === 'IMAGE') {
       try { await this.uploadMedia('sendPhoto', 'photo', ctx); return; }
-      catch (uploadError) {
-        console.warn('[telegram] photo upload failed, trying direct URL', uploadError);
-        try { await this.sendMediaByUrl('sendPhoto', 'photo', ctx); return; }
-        catch (urlError) { console.warn('[telegram] direct photo send failed, falling back to text', urlError); }
-      }
+      catch { try { await this.sendMediaByUrl('sendPhoto', 'photo', ctx); return; } catch {} }
     }
-
     if (ctx.ad.creativeUrl && ctx.ad.format === 'VIDEO') {
       try { await this.uploadMedia('sendVideo', 'video', ctx); return; }
-      catch (uploadError) {
-        console.warn('[telegram] video upload failed, trying direct URL', uploadError);
-        try { await this.sendMediaByUrl('sendVideo', 'video', ctx); return; }
-        catch (urlError) { console.warn('[telegram] direct video send failed, falling back to text', urlError); }
-      }
+      catch { try { await this.sendMediaByUrl('sendVideo', 'video', ctx); return; } catch {} }
     }
-
     await this.sendJson('sendMessage', {
-      chat_id: env.TELEGRAM_CHAT_ID,
+      chat_id: this.resolveChatId(ctx),
       text: this.buildCaption(ctx),
       parse_mode: 'HTML',
       disable_web_page_preview: true,
       reply_markup: this.buildKeyboard(ctx),
     });
+  }
+
+  async sendStopped(args: { chatId: string | number; projectName: string; competitorName: string; libraryId: string; startedAt?: string; lastSeenAt?: string }) {
+    const text = [
+      '⛔ <b>РЕКЛАМУ КОНКУРЕНТА ЗУПИНЕНО</b>',
+      '',
+      `<b>Проект:</b> ${escapeHtml(args.projectName)}`,
+      `<b>Конкурент:</b> ${escapeHtml(args.competitorName)}`,
+      `<b>Library ID:</b> ${escapeHtml(args.libraryId)}`,
+      args.startedAt ? `<b>Старт:</b> ${escapeHtml(args.startedAt)}` : '',
+      args.lastSeenAt ? `<b>Останній раз бачили:</b> ${escapeHtml(args.lastSeenAt)}` : '',
+      '',
+      '<i>Статус визначено після 3 послідовних перевірок, у яких оголошення не було серед активних.</i>',
+    ].filter(Boolean).join('\n');
+    await this.sendJson('sendMessage', { chat_id: String(args.chatId), text, parse_mode: 'HTML', disable_web_page_preview: true });
   }
 }
