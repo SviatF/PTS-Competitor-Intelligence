@@ -39,3 +39,5 @@ jobs:
           path: artifacts/exact-production
           if-no-files-found: ignore
           retention-days: 3
+
+# force run 2026-08-18T06:15-07:00
