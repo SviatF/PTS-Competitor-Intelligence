@@ -141,6 +141,23 @@ async function main() {
     locale: 'en-US',
     userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0 Safari/537.36',
   });
+
+  const sessionId = process.env.INSTAGRAM_SESSIONID?.trim();
+  if (sessionId) {
+    await context.addCookies([{
+      name: 'sessionid',
+      value: sessionId,
+      domain: '.instagram.com',
+      path: '/',
+      httpOnly: true,
+      secure: true,
+      sameSite: 'None',
+    }]);
+    console.log('[exact-instagram] authenticated session cookie configured');
+  } else {
+    console.log('[exact-instagram] no Instagram session cookie configured');
+  }
+
   const results: any[] = [];
   try {
     for (const profileUrl of profiles) {
