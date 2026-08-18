@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { chromium, type Page } from 'playwright';
 
+const SCANNER_API = 'https://qfpwpqflqiwjqpojmngy.supabase.co/functions/v1/scanner-api';
 const profiles = [
   'https://www.instagram.com/tot_yarik/',
   'https://www.instagram.com/traffic.money.ag/',
@@ -10,6 +11,27 @@ const profiles = [
 
 function handleFromUrl(url: string) {
   return new URL(url).pathname.split('/').filter(Boolean)[0] || 'unknown';
+}
+
+async function reportDiscovery(handle: string, result: any) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error('TELEGRAM_BOT_TOKEN is required for discovery persistence');
+  const bestScan = (result.scans || []).sort((a: any, b: any) => Number(b.count || 0) - Number(a.count || 0))[0];
+  const exactAdLibraryUrl = bestScan?.finalUrl || bestScan?.link?.href || result.discovery?.links?.[0]?.href || null;
+  const status = exactAdLibraryUrl ? 'FOUND' : result.error ? 'ERROR' : 'NOT_FOUND';
+  const response = await fetch(SCANNER_API, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({
+      action: 'instagram_discovery',
+      handle,
+      status,
+      exactAdLibraryUrl,
+      exactAdvertiserName: null,
+      payload: result,
+    }),
+  });
+  if (!response.ok) throw new Error(`discovery persistence failed: ${response.status} ${await response.text()}`);
 }
 
 async function clickIfVisible(page: Page, patterns: RegExp[]) {
@@ -48,7 +70,6 @@ async function discoverExactAdLibrary(page: Page, profileUrl: string) {
   let links = await collectAdLibraryLinks(page);
   if (links.length) return { method: 'direct-link', links };
 
-  // Instagram desktop can expose About This Account directly or through the options menu.
   let openedAbout = await clickIfVisible(page, [/About this account/i]);
   if (!openedAbout) {
     const options = page.locator('svg[aria-label="Options"], svg[aria-label="More options"], button[aria-label="Options"], button[aria-label="More options"]');
@@ -62,18 +83,16 @@ async function discoverExactAdLibrary(page: Page, profileUrl: string) {
   links = await collectAdLibraryLinks(page);
   if (links.length) return { method: openedAbout ? 'about-account-link' : 'link-after-menu', links };
 
-  // Sometimes "Active ads" is a button rather than an anchor. Capture navigation or popup.
   const activeAds = page.getByText(/Active ads/i, { exact: false }).first();
   if (await activeAds.count().catch(() => 0) && await activeAds.isVisible().catch(() => false)) {
     const before = page.url();
-    let popupUrl: string | undefined;
     const popupPromise = page.waitForEvent('popup', { timeout: 5_000 }).then(async p => {
       await p.waitForLoadState('domcontentloaded').catch(() => {});
       return p.url();
     }).catch(() => undefined);
     await activeAds.click({ timeout: 5_000 }).catch(() => {});
     await page.waitForTimeout(2_000);
-    popupUrl = await popupPromise;
+    const popupUrl = await popupPromise;
     const after = page.url();
     if (popupUrl && /facebook\.com\/ads\/library/i.test(popupUrl)) return { method: 'active-ads-popup', links: [{ text: 'Active ads', href: popupUrl }] };
     if (after !== before && /facebook\.com\/ads\/library/i.test(after)) return { method: 'active-ads-navigation', links: [{ text: 'Active ads', href: after }] };
@@ -145,11 +164,13 @@ async function main() {
         }
         const result = { handle, profileUrl, discovery, scans };
         results.push(result);
+        await reportDiscovery(handle, result);
         await writeFile(`artifacts/exact-instagram/${handle.replace(/[^a-z0-9._-]/gi, '_')}.json`, JSON.stringify(result, null, 2), 'utf8');
         await page.screenshot({ path: `artifacts/exact-instagram/${handle.replace(/[^a-z0-9._-]/gi, '_')}.png`, fullPage: true }).catch(() => {});
       } catch (error) {
         const result = { handle, profileUrl, error: String(error) };
         results.push(result);
+        await reportDiscovery(handle, result).catch(reportError => console.error(`[exact-instagram] ${handle} report failed`, reportError));
         console.error(`[exact-instagram] ${handle} failed`, error);
       } finally {
         await page.close();
