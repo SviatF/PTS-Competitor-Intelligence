@@ -39,3 +39,5 @@ jobs:
           path: artifacts/exact-production
           if-no-files-found: ignore
           retention-days: 3
+
+# manual production rerun 2026-08-18T05:51-07:00
