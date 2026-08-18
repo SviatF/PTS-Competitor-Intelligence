@@ -30,7 +30,7 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: Scan exact advertisers and notify Telegram
-        run: npx tsx src/exactProductionScan.ts
+        run: xvfb-run -a npx tsx src/exactProductionScan.ts
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -39,5 +39,3 @@ jobs:
           path: artifacts/exact-production
           if-no-files-found: ignore
           retention-days: 3
-
-# manual production rerun 2026-08-18T05:51-07:00
