@@ -1,33 +1,25 @@
 import { mkdir, writeFile } from 'node:fs/promises';
-import { chromium, type BrowserContext, type Page } from 'playwright';
+import { chromium, type Page } from 'playwright';
 
 const REPORT_URL = 'https://qfpwpqflqiwjqpojmngy.supabase.co/functions/v1/exact-facebook-report';
+const pageIds = ['229968643535520', '961705790368723'];
 
-const pages = [
-  { sourceUrl: 'https://www.facebook.com/profile.php?id=61556616056037' },
-  { sourceUrl: 'https://www.facebook.com/profile.php?id=61586423325192' },
-];
-
-function inputIdFromFacebookUrl(sourceUrl: string) {
-  try {
-    return new URL(sourceUrl).searchParams.get('id') || 'unknown';
-  } catch {
-    return 'unknown';
-  }
-}
-
-function adLibraryPageIdFromUrl(url: string) {
-  try {
-    const parsed = new URL(url);
-    return parsed.searchParams.get('view_all_page_id');
-  } catch {
-    return null;
-  }
+function adLibraryUrl(pageId: string) {
+  const p = new URLSearchParams({
+    active_status: 'active',
+    ad_type: 'all',
+    country: 'ALL',
+    is_targeted_country: 'false',
+    media_type: 'all',
+    search_type: 'page',
+    view_all_page_id: pageId,
+  });
+  return `https://www.facebook.com/ads/library/?${p.toString()}`;
 }
 
 async function report(result: any) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token || !result.pageId) return;
+  if (!token) return;
   const r = await fetch(REPORT_URL, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
@@ -37,8 +29,7 @@ async function report(result: any) {
 }
 
 async function clickCookieConsent(page: Page) {
-  const patterns = [/Allow all cookies/i, /Accept all cookies/i, /Allow essential and optional cookies/i, /^Accept$/i];
-  for (const pattern of patterns) {
+  for (const pattern of [/Allow all cookies/i, /Accept all cookies/i, /Allow essential and optional cookies/i, /^Accept$/i]) {
     const btn = page.getByRole('button', { name: pattern }).first();
     if (await btn.count().catch(() => 0)) {
       await btn.click({ timeout: 3000 }).catch(() => {});
@@ -48,95 +39,16 @@ async function clickCookieConsent(page: Page) {
   }
 }
 
-async function collectAdLibraryLinks(page: Page) {
-  return page.evaluate(() => Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href]'))
-    .map(a => ({ text: (a.innerText || a.textContent || '').trim(), href: a.href }))
-    .filter(x => /facebook\.com\/ads\/library/i.test(x.href)));
-}
-
-async function clickAndCaptureAdLibrary(page: Page, locator: any) {
-  const before = page.url();
-  const popupPromise = page.waitForEvent('popup', { timeout: 7000 }).then(async popup => {
-    await popup.waitForLoadState('domcontentloaded').catch(() => {});
-    return popup.url();
-  }).catch(() => undefined);
-
-  await locator.click({ timeout: 7000 }).catch(() => {});
-  await page.waitForTimeout(2500);
-  const popupUrl = await popupPromise;
-  const after = page.url();
-
-  if (popupUrl && /facebook\.com\/ads\/library/i.test(popupUrl)) return popupUrl;
-  if (after !== before && /facebook\.com\/ads\/library/i.test(after)) return after;
-  return null;
-}
-
-async function discoverExactAdLibraryUrl(page: Page, sourceUrl: string) {
-  await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-  await clickCookieConsent(page);
-  await page.waitForTimeout(5000);
-
-  let links = await collectAdLibraryLinks(page);
-  const direct = links.find(link => adLibraryPageIdFromUrl(link.href));
-  if (direct) return { method: 'direct-ad-library-link', url: direct.href };
-
-  const transparencyCandidates = [
-    page.getByText(/Page transparency/i, { exact: false }),
-    page.getByRole('button', { name: /Page transparency/i }),
-    page.getByRole('link', { name: /Page transparency/i }),
-  ];
-
-  for (const candidate of transparencyCandidates) {
-    if (!(await candidate.count().catch(() => 0))) continue;
-    const first = candidate.first();
-    if (!(await first.isVisible().catch(() => false))) continue;
-    await first.click({ timeout: 7000 }).catch(() => {});
-    await page.waitForTimeout(2500);
-    break;
-  }
-
-  links = await collectAdLibraryLinks(page);
-  const afterTransparency = links.find(link => adLibraryPageIdFromUrl(link.href));
-  if (afterTransparency) return { method: 'page-transparency-link', url: afterTransparency.href };
-
-  const goToAdLibraryCandidates = [
-    page.getByRole('link', { name: /Go to Ad Library|Ad Library/i }),
-    page.getByRole('button', { name: /Go to Ad Library|Ad Library/i }),
-    page.getByText(/Go to Ad Library/i, { exact: false }),
-  ];
-
-  for (const candidate of goToAdLibraryCandidates) {
-    if (!(await candidate.count().catch(() => 0))) continue;
-    const first = candidate.first();
-    if (!(await first.isVisible().catch(() => false))) continue;
-    const captured = await clickAndCaptureAdLibrary(page, first);
-    if (captured && adLibraryPageIdFromUrl(captured)) return { method: 'page-transparency-click', url: captured };
-  }
-
-  const html = await page.content().catch(() => '');
-  const embeddedUrls = [...html.matchAll(/https?:\\?\/\\?\/(?:www\\?\.)?facebook\\?\.com\\?\/ads\\?\/library[^"'<>\s]*/gi)]
-    .map(match => match[0].replace(/\\u0026/g, '&').replace(/\\\//g, '/'));
-  const embedded = embeddedUrls.find(url => adLibraryPageIdFromUrl(url));
-  if (embedded) return { method: 'embedded-html', url: embedded };
-
-  const body = await page.locator('body').innerText().catch(() => '');
-  return {
-    method: 'not-found',
-    url: null,
-    bodySnippet: body.slice(0, 10000),
-    finalFacebookUrl: page.url(),
-  };
-}
-
-async function scanExactAdLibrary(page: Page, url: string) {
+async function scan(page: Page, pageId: string) {
+  const url = adLibraryUrl(pageId);
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await clickCookieConsent(page);
   await page.waitForTimeout(5000);
 
   let body = '';
   let state: 'ADS' | 'EMPTY' | 'INCOMPLETE' = 'INCOMPLETE';
-  const start = Date.now();
-  while (Date.now() - start < 45_000) {
+  const started = Date.now();
+  while (Date.now() - started < 45_000) {
     body = await page.locator('body').innerText().catch(() => '');
     if (/Library ID\s*:?\s*\d+/i.test(body)) { state = 'ADS'; break; }
     if (/No ads match|No results|There are no ads|doesn't have any ads|no active ads/i.test(body)) { state = 'EMPTY'; break; }
@@ -165,17 +77,21 @@ async function scanExactAdLibrary(page: Page, url: string) {
   const resultCountMatch = body.match(/~?([\d,.]+)\s+results?/i);
 
   return {
+    pageId,
+    sourceUrl: null,
+    url,
+    finalUrl: page.url(),
     status: state,
     count: state === 'INCOMPLETE' ? null : libraryIds.length,
     libraryIds,
     advertisers,
     visibleResultCount: resultCountMatch ? resultCountMatch[1] : null,
-    finalUrl: page.url(),
     bodySnippet: body.slice(0, 12000),
   };
 }
 
-async function createContext() {
+async function main() {
+  await mkdir('artifacts/exact-facebook', { recursive: true });
   const browser = await chromium.launch({
     headless: false,
     args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
@@ -185,94 +101,27 @@ async function createContext() {
     locale: 'en-US',
     userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
   });
-  await context.addInitScript(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-  });
-  return { browser, context };
-}
+  await context.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => undefined }));
 
-async function main() {
-  await mkdir('artifacts/exact-facebook', { recursive: true });
-  const { browser, context } = await createContext();
   const results: any[] = [];
-
   try {
-    for (const item of pages) {
-      const inputId = inputIdFromFacebookUrl(item.sourceUrl);
-      const discoveryPage = await context.newPage();
-      console.log(`[facebook-discovery] source=${item.sourceUrl}`);
-
+    for (const pageId of pageIds) {
+      const page = await context.newPage();
       try {
-        const discovery = await discoverExactAdLibraryUrl(discoveryPage, item.sourceUrl);
-        const discoveredUrl = discovery.url;
-        const discoveredPageId = discoveredUrl ? adLibraryPageIdFromUrl(discoveredUrl) : null;
-
-        console.log(`[facebook-discovery] input_id=${inputId} method=${discovery.method} real_ad_library_id=${discoveredPageId || 'NOT_FOUND'}`);
-
-        if (!discoveredUrl || !discoveredPageId) {
-          const result = {
-            pageId: `discovery-${inputId}`,
-            sourceUrl: item.sourceUrl,
-            inputFacebookId: inputId,
-            discoveredAdLibraryPageId: null,
-            discovery,
-            status: 'DISCOVERY_INCOMPLETE',
-            count: null,
-            libraryIds: [],
-            advertisers: [],
-            error: 'Could not resolve exact Ad Library view_all_page_id from Facebook Page Transparency',
-          };
-          results.push(result);
-          await writeFile(`artifacts/exact-facebook/${inputId}-discovery.json`, JSON.stringify(result, null, 2), 'utf8');
-          await discoveryPage.screenshot({ path: `artifacts/exact-facebook/${inputId}-discovery.png`, fullPage: true }).catch(() => {});
-          continue;
-        }
-
-        const scanPage = await context.newPage();
-        try {
-          const scan = await scanExactAdLibrary(scanPage, discoveredUrl);
-          const result = {
-            pageId: discoveredPageId,
-            sourceUrl: item.sourceUrl,
-            inputFacebookId: inputId,
-            discoveredAdLibraryPageId: discoveredPageId,
-            discoveryMethod: discovery.method,
-            url: discoveredUrl,
-            ...scan,
-          };
-          results.push(result);
-          console.log(`[exact-facebook] input_id=${inputId} real_ad_library_id=${discoveredPageId} state=${scan.status} ads=${scan.libraryIds.length} visibleResults=${scan.visibleResultCount || '-'}`);
-          await report(result);
-          await writeFile(`artifacts/exact-facebook/${inputId}-${discoveredPageId}.json`, JSON.stringify(result, null, 2), 'utf8');
-          await scanPage.screenshot({ path: `artifacts/exact-facebook/${inputId}-${discoveredPageId}.png`, fullPage: true }).catch(() => {});
-        } finally {
-          await scanPage.close();
-        }
-      } catch (error) {
-        const result = {
-          pageId: `error-${inputId}`,
-          sourceUrl: item.sourceUrl,
-          inputFacebookId: inputId,
-          status: 'ERROR',
-          count: null,
-          libraryIds: [],
-          advertisers: [],
-          error: String(error),
-        };
+        const result = await scan(page, pageId);
         results.push(result);
-        console.error(`[facebook-discovery] input_id=${inputId} failed`, error);
+        console.log(`[exact-facebook-id] page=${pageId} status=${result.status} ads=${result.libraryIds.length} visibleResults=${result.visibleResultCount || '-'} advertisers=${result.advertisers.join(' | ')}`);
+        await report(result);
+        await writeFile(`artifacts/exact-facebook/${pageId}.json`, JSON.stringify(result, null, 2), 'utf8');
+        await page.screenshot({ path: `artifacts/exact-facebook/${pageId}.png`, fullPage: true }).catch(() => {});
       } finally {
-        await discoveryPage.close();
+        await page.close();
       }
     }
   } finally {
     await browser.close();
   }
-
   await writeFile('artifacts/exact-facebook/summary.json', JSON.stringify(results, null, 2), 'utf8');
 }
 
-main().catch(error => {
-  console.error(error);
-  process.exit(1);
-});
+main().catch(error => { console.error(error); process.exit(1); });
