@@ -64,7 +64,6 @@ async function collectAdLibraryLinks(page: Page) {
 async function discoverExactAdLibrary(page: Page, profileUrl: string) {
   await page.goto(profileUrl, { waitUntil: 'domcontentloaded', timeout: 60_000 });
   await page.waitForTimeout(6_000);
-
   await clickIfVisible(page, [/Allow all cookies/i, /Accept all/i, /Allow essential and optional cookies/i]);
 
   let links = await collectAdLibraryLinks(page);
@@ -200,3 +199,5 @@ async function main() {
 }
 
 main().catch(err => { console.error(err); process.exit(1); });
+
+// trigger exact Instagram scan after session secret update
