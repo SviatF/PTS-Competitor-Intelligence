@@ -69,7 +69,6 @@ async function main() {
         await clickCookieConsent(page);
         await page.waitForTimeout(5000);
 
-        // Wait explicitly for either ad cards or an explicit empty-state message.
         const start = Date.now();
         let body = '';
         let state: 'ADS' | 'EMPTY' | 'INCOMPLETE' = 'INCOMPLETE';
@@ -81,7 +80,6 @@ async function main() {
           await page.waitForTimeout(1500);
         }
 
-        // Continue scrolling when ads exist so lazy-loaded cards are included.
         if (state === 'ADS') {
           let prev = -1;
           let stable = 0;
@@ -134,3 +132,5 @@ async function main() {
 }
 
 main().catch(e => { console.error(e); process.exit(1); });
+
+// manual exact-facebook scan trigger 2026-08-18T02:43-07:00
