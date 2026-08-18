@@ -1,5 +1,5 @@
 export type CollectedAd = {
-  source: 'META' | 'GOOGLE';
+  source: 'META' | 'GOOGLE' | 'TIKTOK';
   externalId?: string;
   fingerprint: string;
   format?: 'IMAGE' | 'VIDEO' | 'CAROUSEL' | 'UNKNOWN';
@@ -17,6 +17,7 @@ export type CollectorCompetitor = {
   name: string;
   website?: string | null;
   metaAdLibraryUrl?: string | null;
+  tiktokUrl?: string | null;
 };
 
 export interface AdCollector {
