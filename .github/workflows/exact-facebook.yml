@@ -26,7 +26,7 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: Scan exact Facebook pages
-        run: npx tsx src/exactFacebookScan.ts
+        run: xvfb-run -a npx tsx src/exactFacebookScan.ts
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
