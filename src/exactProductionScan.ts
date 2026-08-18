@@ -14,24 +14,328 @@ const workspace = {
 
 const competitors = [
   { id: '9ae92498-889d-4839-a641-3cdb6050bc82', name: 'ADS Wind Agency', pageId: '229968643535520' },
-  { id: '41516d3c-b8b-4d73-b107-65306eab9dac', name: 'Traffic.Money.Agency', pageId: '961705790368723' },
+  { id: '41516d3c-b8b8-4d73-b107-65306eab9dac', name: 'Traffic.Money.Agency', pageId: '961705790368723' },
 ];
 
-type ParsedAd = { libraryId:string; advertiser:string; startedAt?:string; format:'IMAGE'|'VIDEO'|'UNKNOWN'; cta?:string; destinationType:string; primaryText:string; landingUrl?:string; creativeUrl?:string; adLibraryUrl:string };
+type ParsedAd = {
+  libraryId: string;
+  advertiser: string;
+  startedAt?: string;
+  format: 'IMAGE' | 'VIDEO' | 'UNKNOWN';
+  cta?: string;
+  destinationType: string;
+  primaryText: string;
+  landingUrl?: string;
+  creativeUrl?: string;
+  adLibraryUrl: string;
+};
 
-function headers(){const token=process.env.TELEGRAM_BOT_TOKEN;if(!token)throw new Error('TELEGRAM_BOT_TOKEN is required');return {authorization:`Bearer ${token}`,'content-type':'application/json'};}
-function adLibraryUrl(pageId:string){const p=new URLSearchParams({active_status:'active',ad_type:'all',country:'ALL',is_targeted_country:'false',media_type:'all',search_type:'page',view_all_page_id:pageId});return `https://www.facebook.com/ads/library/?${p.toString()}`;}
-async function reconcile(competitorId:string,ads:ParsedAd[]){const r=await fetch(SCANNER_API,{method:'POST',headers:headers(),body:JSON.stringify({action:'reconcile',workspaceId:workspace.id,competitorId,ads})});if(!r.ok)throw new Error(`reconcile failed ${r.status}: ${await r.text()}`);return r.json() as Promise<{events:Array<{type:'NEW'|'REACTIVATED'|'STOPPED';ad:any}>}>;}
-async function clickCookieConsent(page:Page){for(const pattern of [/Allow all cookies/i,/Accept all cookies/i,/Allow essential and optional cookies/i,/^Accept$/i]){const btn=page.getByRole('button',{name:pattern}).first();if(await btn.count().catch(()=>0)){await btn.click({timeout:3000}).catch(()=>{});await page.waitForTimeout(1000);break;}}}
-async function loadAll(page:Page){const started=Date.now();let last=-1,stable=0;while(Date.now()-started<60000){const body=await page.locator('body').innerText().catch(()=>'');const count=new Set([...body.matchAll(/Library ID\s*:?\s*(\d+)/gi)].map(m=>m[1])).size;stable=count===last?stable+1:0;last=count;if(count>0&&stable>=4)break;await page.mouse.wheel(0,2600);await page.waitForTimeout(1200);}}
-function clean(value:string){return value.replace(/\u200b/g,'').replace(/\n{3,}/g,'\n\n').trim();}
-function parseAdvertiser(text:string){const m=text.match(/(?:See ad details|See summary details)\s*\n([^\n]+)\s*\nSponsored/i);if(m?.[1])return clean(m[1]);const lines=text.split('\n').map(x=>x.trim()).filter(Boolean);const i=lines.findIndex(x=>/^Sponsored$/i.test(x));return i>0?lines[i-1]:'';}
-function parseStartedAt(text:string){return text.match(/Started running on\s+([^\n·]+)/i)?.[1]?.trim();}
-const ctas=['Send Message','Learn More','Sign Up','Book Now','Apply Now','Contact Us','Get Offer','Shop Now','Get Quote','Subscribe','Download','Watch More','Order Now','Buy Now','Get Started','WhatsApp'];
-function parseCta(text:string,candidates:string[]){for(const c of candidates){const found=ctas.find(x=>x.toLowerCase()===c.trim().toLowerCase());if(found)return found;}const lower=text.toLowerCase();return ctas.find(x=>lower.includes(x.toLowerCase()));}
-function parsePrimaryText(text:string){const i=text.search(/\nSponsored\s*\n/i);if(i<0)return clean(text).slice(0,5000);let out=text.slice(i).replace(/^\n?Sponsored\s*\n/i,'');for(const marker of ['\nLow impression count','\nImpressions:','\nOpen Dropdown','\nSee ad details','\nSee summary details']){const j=out.indexOf(marker);if(j>0)out=out.slice(0,j);}return clean(out).slice(0,5000);}
-function cleanLandingUrl(href:string){try{const u=new URL(href);if((u.hostname==='l.facebook.com'||u.hostname==='lm.facebook.com')&&u.pathname==='/l.php'){const target=u.searchParams.get('u');if(target)return decodeURIComponent(target);}if(u.hostname==='facebook.com'||u.hostname.endsWith('.facebook.com')||u.hostname.endsWith('meta.com'))return undefined;return u.toString();}catch{return undefined;}}
-async function extractAds(page:Page,expectedAdvertiser:string,pageId:string):Promise<ParsedAd[]>{const cards=await page.evaluate(()=>{const leaves=Array.from(document.querySelectorAll<HTMLElement>('body *')).filter(el=>el.childElementCount===0&&/^Library ID\s*:?\s*\d+$/i.test((el.textContent||'').trim()));const result:any[]=[];const seen=new Set<string>();for(const marker of leaves){const id=(marker.textContent||'').match(/(\d+)/)?.[1];if(!id||seen.has(id))continue;let node:HTMLElement|null=marker;let card:HTMLElement|null=null;for(let d=0;d<14&&node;d++){const text=(node.innerText||'').trim();if(text.length>120&&/Sponsored/i.test(text)&&/Started running on/i.test(text))card=node;if(text.length>12000)break;node=node.parentElement;}if(!card)continue;seen.add(id);const hrefs=Array.from(card.querySelectorAll<HTMLAnchorElement>('a[href]')).map(a=>a.href).filter(Boolean);const buttons=Array.from(card.querySelectorAll<HTMLElement>('a,button,[role="button"]')).map(el=>(el.innerText||el.textContent||'').trim()).filter(Boolean);const images=Array.from(card.querySelectorAll<HTMLImageElement>('img')).map(img=>{const r=img.getBoundingClientRect();return {url:img.currentSrc||img.src,w:r.width,h:r.height,nw:img.naturalWidth,nh:img.naturalHeight,alt:img.alt||''};}).filter(x=>x.url);const videos=Array.from(card.querySelectorAll<HTMLVideoElement>('video')).flatMap(v=>[v.currentSrc,v.src,...Array.from(v.querySelectorAll<HTMLSourceElement>('source[src]')).map(s=>s.src)]).filter(Boolean);result.push({id,text:card.innerText,hrefs:[...new Set(hrefs)],buttons:[...new Set(buttons)],images,videos:[...new Set(videos)]});}return result;});const url=adLibraryUrl(pageId);return cards.flatMap((card:any)=>{const advertiser=parseAdvertiser(card.text)||expectedAdvertiser;const landingUrl=card.hrefs.map(cleanLandingUrl).find(Boolean);const cta=parseCta(card.text,card.buttons);const all=card.hrefs.join(' ').toLowerCase();const destinationType=all.includes('whatsapp')||(cta||'').toLowerCase().includes('whatsapp')?'WHATSAPP':all.includes('m.me/')||all.includes('messenger')||(cta||'').toLowerCase().includes('message')?'MESSAGES':landingUrl?'WEBSITE':'META_INTERNAL';const video=card.videos.find((x:string)=>/^https?:/i.test(x));const image=card.images.filter((x:any)=>/^https?:/i.test(x.url)&&/fbcdn|fbsbx|cdninstagram/i.test(x.url)&&x.w>=120&&x.h>=90&&!/profile|avatar/i.test(x.alt)).sort((a:any,b:any)=>b.w*b.h-a.w*a.h||b.nw*b.nh-a.nw*a.nh)[0];const creativeUrl=video||image?.url;return [{libraryId:card.id,advertiser,startedAt:parseStartedAt(card.text),format:video?'VIDEO':image?'IMAGE':'UNKNOWN',cta,destinationType,primaryText:parsePrimaryText(card.text),landingUrl,creativeUrl,adLibraryUrl:url} satisfies ParsedAd];});}
-function collected(ad:any):CollectedAd{return {source:'META',externalId:ad.libraryId,fingerprint:`META:${ad.libraryId}`,format:ad.format||'UNKNOWN',primaryText:ad.primaryText||'',cta:ad.cta,landingUrl:ad.landingUrl,creativeUrl:ad.creativeUrl,adLibraryUrl:ad.adLibraryUrl,raw:{advertiser:ad.advertiser,startedAt:ad.startedAt,destinationType:ad.destinationType}};}
-async function main(){await mkdir('artifacts/exact-production',{recursive:true});const notifier=new TelegramNotifier();const browser=await chromium.launch({headless:false,args:['--disable-blink-features=AutomationControlled','--no-sandbox']});const context=await browser.newContext({viewport:{width:1600,height:1200},locale:'en-US',userAgent:'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36'});await context.addInitScript(()=>Object.defineProperty(navigator,'webdriver',{get:()=>undefined}));try{for(const competitor of competitors){const page=await context.newPage();const url=adLibraryUrl(competitor.pageId);try{console.log(`[exact-production] ${competitor.name} page=${competitor.pageId}`);await page.goto(url,{waitUntil:'domcontentloaded',timeout:60000});await clickCookieConsent(page);await page.waitForTimeout(5000);await loadAll(page);const body=await page.locator('body').innerText().catch(()=>'');const hasAds=/Library ID\s*:?\s*\d+/i.test(body);const explicitEmpty=/No ads match|No results|There are no ads|doesn't have any ads|no active ads/i.test(body);if(!hasAds&&!explicitEmpty){console.log(`[exact-production] ${competitor.name} INCOMPLETE — skipping reconcile`);continue;}const ads=hasAds?await extractAds(page,competitor.name,competitor.pageId):[];console.log(`[exact-production] ${competitor.name} exact_ads=${ads.length}`);await writeFile(`artifacts/exact-production/${competitor.pageId}.json`,JSON.stringify(ads,null,2),'utf8');const {events}=await reconcile(competitor.id,ads);console.log(`[exact-production] ${competitor.name} events=${events.length}`);for(const event of events){if(event.type==='STOPPED'){await notifier.sendStopped({chatId:workspace.chatId,projectName:workspace.projectName,competitorName:competitor.name,libraryId:String(event.ad.libraryId||''),startedAt:event.ad.startedAt,lastSeenAt:event.ad.lastSeenAt});}else{await notifier.sendNewAd({chatId:workspace.chatId,projectName:workspace.projectName,geo:workspace.geo,competitorName:competitor.name,eventType:event.type,ad:collected(event.ad)});}}}finally{await page.screenshot({path:`artifacts/exact-production/${competitor.pageId}.png`,fullPage:true}).catch(()=>{});await page.close();}}}finally{await browser.close();}}
-main().catch(err=>{console.error(err);process.exit(1);});
+function headers() {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error('TELEGRAM_BOT_TOKEN is required');
+  return { authorization: `Bearer ${token}`, 'content-type': 'application/json' };
+}
+
+function adLibraryUrl(pageId: string) {
+  const p = new URLSearchParams({
+    active_status: 'active',
+    ad_type: 'all',
+    country: 'ALL',
+    is_targeted_country: 'false',
+    media_type: 'all',
+    search_type: 'page',
+    view_all_page_id: pageId,
+  });
+  return `https://www.facebook.com/ads/library/?${p.toString()}`;
+}
+
+async function reconcile(competitorId: string, ads: ParsedAd[]) {
+  const r = await fetch(SCANNER_API, {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify({ action: 'reconcile', workspaceId: workspace.id, competitorId, ads }),
+  });
+  if (!r.ok) throw new Error(`reconcile failed ${r.status}: ${await r.text()}`);
+  return r.json() as Promise<{ events: Array<{ type: 'NEW' | 'REACTIVATED' | 'STOPPED'; ad: any }> }>;
+}
+
+async function clickCookieConsent(page: Page) {
+  for (const pattern of [/Allow all cookies/i, /Accept all cookies/i, /Allow essential and optional cookies/i, /^Accept$/i]) {
+    const btn = page.getByRole('button', { name: pattern }).first();
+    if (await btn.count().catch(() => 0)) {
+      await btn.click({ timeout: 3000 }).catch(() => {});
+      await page.waitForTimeout(1000);
+      break;
+    }
+  }
+}
+
+async function loadAll(page: Page) {
+  const started = Date.now();
+  let last = -1;
+  let stable = 0;
+  while (Date.now() - started < 60_000) {
+    const body = await page.locator('body').innerText().catch(() => '');
+    const count = new Set([...body.matchAll(/Library ID\s*:?\s*(\d+)/gi)].map(m => m[1])).size;
+    stable = count === last ? stable + 1 : 0;
+    last = count;
+    if (count > 0 && stable >= 4) break;
+    await page.mouse.wheel(0, 2600);
+    await page.waitForTimeout(1200);
+  }
+}
+
+function clean(value: string) {
+  return value.replace(/\u200b/g, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function parseAdvertiser(text: string) {
+  const m = text.match(/(?:See ad details|See summary details)\s*\n([^\n]+)\s*\nSponsored/i);
+  if (m?.[1]) return clean(m[1]);
+  const lines = text.split('\n').map(x => x.trim()).filter(Boolean);
+  const i = lines.findIndex(x => /^Sponsored$/i.test(x));
+  return i > 0 ? lines[i - 1] : '';
+}
+
+function parseStartedAt(text: string) {
+  return text.match(/Started running on\s+([^\n·]+)/i)?.[1]?.trim();
+}
+
+const ctas = ['Send Message', 'Learn More', 'Sign Up', 'Book Now', 'Apply Now', 'Contact Us', 'Get Offer', 'Shop Now', 'Get Quote', 'Subscribe', 'Download', 'Watch More', 'Order Now', 'Buy Now', 'Get Started', 'WhatsApp'];
+
+function parseCta(text: string, candidates: string[]) {
+  for (const c of candidates) {
+    const found = ctas.find(x => x.toLowerCase() === c.trim().toLowerCase());
+    if (found) return found;
+  }
+  const lower = text.toLowerCase();
+  return ctas.find(x => lower.includes(x.toLowerCase()));
+}
+
+function parsePrimaryText(text: string) {
+  const i = text.search(/\nSponsored\s*\n/i);
+  if (i < 0) return clean(text).slice(0, 5000);
+  let out = text.slice(i).replace(/^\n?Sponsored\s*\n/i, '');
+  for (const marker of ['\nLow impression count', '\nImpressions:', '\nOpen Dropdown', '\nSee ad details', '\nSee summary details', '\nActive\nLibrary ID:']) {
+    const j = out.indexOf(marker);
+    if (j > 0) out = out.slice(0, j);
+  }
+  return clean(out).slice(0, 5000);
+}
+
+function cleanLandingUrl(href: string) {
+  try {
+    const u = new URL(href);
+    if ((u.hostname === 'l.facebook.com' || u.hostname === 'lm.facebook.com') && u.pathname === '/l.php') {
+      const target = u.searchParams.get('u');
+      if (target) return decodeURIComponent(target);
+    }
+    if (u.hostname === 'facebook.com' || u.hostname.endsWith('.facebook.com') || u.hostname.endsWith('meta.com')) return undefined;
+    return u.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+async function extractAds(page: Page, expectedAdvertiser: string, pageId: string): Promise<ParsedAd[]> {
+  const cards = await page.evaluate(() => {
+    const libraryIdRegex = /Library ID\s*:?\s*(\d+)/gi;
+    const leaves = Array.from(document.querySelectorAll<HTMLElement>('body *')).filter(el =>
+      el.childElementCount === 0 && /^Library ID\s*:?\s*\d+$/i.test((el.textContent || '').trim())
+    );
+    const result: any[] = [];
+    const seen = new Set<string>();
+
+    for (const marker of leaves) {
+      const id = (marker.textContent || '').match(/(\d+)/)?.[1];
+      if (!id || seen.has(id)) continue;
+
+      let node: HTMLElement | null = marker;
+      let card: HTMLElement | null = null;
+
+      // Keep the largest ancestor that still belongs to exactly ONE Library ID.
+      // Stop as soon as the container starts including neighbouring ads.
+      for (let depth = 0; depth < 20 && node; depth++) {
+        const text = (node.innerText || '').trim();
+        const ids = [...text.matchAll(libraryIdRegex)].map(m => m[1]);
+        const uniqueIds = [...new Set(ids)];
+
+        if (uniqueIds.length > 1) break;
+        if (
+          uniqueIds.length === 1 &&
+          uniqueIds[0] === id &&
+          text.length > 120 &&
+          /Sponsored/i.test(text) &&
+          /Started running on/i.test(text)
+        ) {
+          card = node;
+        }
+        node = node.parentElement;
+      }
+
+      if (!card) continue;
+
+      const cardText = card.innerText || '';
+      const idsInside = [...cardText.matchAll(/Library ID\s*:?\s*(\d+)/gi)].map(m => m[1]);
+      const uniqueInside = [...new Set(idsInside)];
+      if (uniqueInside.length !== 1 || uniqueInside[0] !== id) continue;
+
+      seen.add(id);
+
+      const hrefs = Array.from(card.querySelectorAll<HTMLAnchorElement>('a[href]')).map(a => a.href).filter(Boolean);
+      const buttons = Array.from(card.querySelectorAll<HTMLElement>('a,button,[role="button"]'))
+        .map(el => (el.innerText || el.textContent || '').trim())
+        .filter(Boolean);
+      const images = Array.from(card.querySelectorAll<HTMLImageElement>('img')).map(img => {
+        const r = img.getBoundingClientRect();
+        return {
+          url: img.currentSrc || img.src,
+          w: r.width,
+          h: r.height,
+          nw: img.naturalWidth,
+          nh: img.naturalHeight,
+          alt: img.alt || '',
+        };
+      }).filter(x => x.url);
+      const videos = Array.from(card.querySelectorAll<HTMLVideoElement>('video'))
+        .flatMap(v => [v.currentSrc, v.src, ...Array.from(v.querySelectorAll<HTMLSourceElement>('source[src]')).map(s => s.src)])
+        .filter(Boolean);
+
+      result.push({
+        id,
+        text: cardText,
+        hrefs: [...new Set(hrefs)],
+        buttons: [...new Set(buttons)],
+        images,
+        videos: [...new Set(videos)],
+      });
+    }
+
+    return result;
+  });
+
+  const url = adLibraryUrl(pageId);
+  return cards.map((card: any) => {
+    const advertiser = parseAdvertiser(card.text) || expectedAdvertiser;
+    const landingUrl = card.hrefs.map(cleanLandingUrl).find(Boolean);
+    const cta = parseCta(card.text, card.buttons);
+    const all = card.hrefs.join(' ').toLowerCase();
+    const destinationType = all.includes('whatsapp') || (cta || '').toLowerCase().includes('whatsapp')
+      ? 'WHATSAPP'
+      : all.includes('m.me/') || all.includes('messenger') || (cta || '').toLowerCase().includes('message')
+        ? 'MESSAGES'
+        : landingUrl ? 'WEBSITE' : 'META_INTERNAL';
+
+    const video = card.videos.find((x: string) => /^https?:/i.test(x));
+    const image = card.images
+      .filter((x: any) => /^https?:/i.test(x.url) && /fbcdn|fbsbx|cdninstagram/i.test(x.url) && x.w >= 120 && x.h >= 90 && !/profile|avatar/i.test(x.alt))
+      .sort((a: any, b: any) => b.w * b.h - a.w * a.h || b.nw * b.nh - a.nw * a.nh)[0];
+    const creativeUrl = video || image?.url;
+
+    return {
+      libraryId: card.id,
+      advertiser,
+      startedAt: parseStartedAt(card.text),
+      format: video ? 'VIDEO' : image ? 'IMAGE' : 'UNKNOWN',
+      cta,
+      destinationType,
+      primaryText: parsePrimaryText(card.text),
+      landingUrl,
+      creativeUrl,
+      adLibraryUrl: url,
+    } satisfies ParsedAd;
+  });
+}
+
+function collected(ad: any): CollectedAd {
+  return {
+    source: 'META',
+    externalId: ad.libraryId,
+    fingerprint: `META:${ad.libraryId}`,
+    format: ad.format || 'UNKNOWN',
+    primaryText: ad.primaryText || '',
+    cta: ad.cta,
+    landingUrl: ad.landingUrl,
+    creativeUrl: ad.creativeUrl,
+    adLibraryUrl: ad.adLibraryUrl,
+    raw: { advertiser: ad.advertiser, startedAt: ad.startedAt, destinationType: ad.destinationType },
+  };
+}
+
+async function main() {
+  await mkdir('artifacts/exact-production', { recursive: true });
+  const notifier = new TelegramNotifier();
+  const browser = await chromium.launch({
+    headless: false,
+    args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
+  });
+  const context = await browser.newContext({
+    viewport: { width: 1600, height: 1200 },
+    locale: 'en-US',
+    userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36',
+  });
+  await context.addInitScript(() => Object.defineProperty(navigator, 'webdriver', { get: () => undefined }));
+
+  try {
+    for (const competitor of competitors) {
+      const page = await context.newPage();
+      const url = adLibraryUrl(competitor.pageId);
+      try {
+        console.log(`[exact-production] ${competitor.name} page=${competitor.pageId}`);
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+        await clickCookieConsent(page);
+        await page.waitForTimeout(5000);
+        await loadAll(page);
+
+        const body = await page.locator('body').innerText().catch(() => '');
+        const hasAds = /Library ID\s*:?\s*\d+/i.test(body);
+        const explicitEmpty = /No ads match|No results|There are no ads|doesn't have any ads|no active ads/i.test(body);
+
+        if (!hasAds && !explicitEmpty) {
+          console.log(`[exact-production] ${competitor.name} INCOMPLETE — skipping reconcile`);
+          continue;
+        }
+
+        const ads = hasAds ? await extractAds(page, competitor.name, competitor.pageId) : [];
+        console.log(`[exact-production] ${competitor.name} exact_ads=${ads.length}`);
+        console.log(`[exact-production] ${competitor.name} ids=${ads.map(a => a.libraryId).join(',')}`);
+        await writeFile(`artifacts/exact-production/${competitor.pageId}.json`, JSON.stringify(ads, null, 2), 'utf8');
+
+        const { events } = await reconcile(competitor.id, ads);
+        console.log(`[exact-production] ${competitor.name} events=${events.length}`);
+
+        for (const event of events) {
+          if (event.type === 'STOPPED') {
+            await notifier.sendStopped({
+              chatId: workspace.chatId,
+              projectName: workspace.projectName,
+              competitorName: competitor.name,
+              libraryId: String(event.ad.libraryId || ''),
+              startedAt: event.ad.startedAt,
+              lastSeenAt: event.ad.lastSeenAt,
+            });
+          } else {
+            await notifier.sendNewAd({
+              chatId: workspace.chatId,
+              projectName: workspace.projectName,
+              geo: workspace.geo,
+              competitorName: competitor.name,
+              eventType: event.type,
+              ad: collected(event.ad),
+            });
+          }
+        }
+      } finally {
+        await page.screenshot({ path: `artifacts/exact-production/${competitor.pageId}.png`, fullPage: true }).catch(() => {});
+        await page.close();
+      }
+    }
+  } finally {
+    await browser.close();
+  }
+}
+
+main().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
