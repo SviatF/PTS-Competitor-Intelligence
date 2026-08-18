@@ -1,12 +1,15 @@
-name: Exact Facebook Active Ads
+name: Exact Facebook Production Scanner
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
     paths:
-      - 'src/exactFacebookScan.ts'
+      - 'src/exactProductionScan.ts'
+      - 'src/telegram/TelegramNotifier.ts'
       - '.github/workflows/exact-facebook.yml'
+  schedule:
+    - cron: '*/5 * * * *'
 
 jobs:
   scan:
@@ -14,6 +17,7 @@ jobs:
     timeout-minutes: 25
     env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,13 +29,13 @@ jobs:
         run: npm install --include=dev
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
-      - name: Scan exact Facebook pages
-        run: xvfb-run -a npx tsx src/exactFacebookScan.ts
+      - name: Scan exact advertisers and notify Telegram
+        run: npx tsx src/exactProductionScan.ts
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: exact-facebook-active-ads
-          path: artifacts/exact-facebook
-          if-no-files-found: warn
+          name: exact-facebook-production
+          path: artifacts/exact-production
+          if-no-files-found: ignore
           retention-days: 3
