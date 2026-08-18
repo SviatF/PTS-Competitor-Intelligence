@@ -5,7 +5,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'src/exactProductionScan.ts'
+      - 'src/dynamicMetaProductionScan.ts'
       - 'src/telegram/TelegramNotifier.ts'
       - 'src/config/env.ts'
       - '.github/workflows/exact-facebook.yml'
@@ -31,7 +31,7 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: Scan exact advertisers and notify Telegram
-        run: xvfb-run -a npx tsx src/exactProductionScan.ts
+        run: xvfb-run -a npx tsx src/dynamicMetaProductionScan.ts
       - name: Upload diagnostics
         if: always()
         uses: actions/upload-artifact@v4
