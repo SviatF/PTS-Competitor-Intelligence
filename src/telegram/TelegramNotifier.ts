@@ -132,14 +132,15 @@ export class TelegramNotifier {
     await this.sendJson('sendMessage', { chat_id: this.resolveChatId(ctx), text: this.buildCaption(ctx), parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: this.buildKeyboard(ctx) });
   }
 
-  async sendStopped(args: { chatId: string | number; projectName: string; competitorName: string; adId: string; source?: CollectedAd['source']; startedAt?: string; lastSeenAt?: string }) {
+  async sendStopped(args: { chatId: string | number; projectName: string; competitorName: string; adId?: string; libraryId?: string; source?: CollectedAd['source']; startedAt?: string; lastSeenAt?: string }) {
     const source = args.source || 'META';
+    const resolvedId = args.adId || args.libraryId || '—';
     const text = [
       '⛔ <b>РЕКЛАМУ КОНКУРЕНТА ЗУПИНЕНО</b>', '',
       `<b>Проект:</b> ${escapeHtml(args.projectName)}`,
       `<b>Конкурент:</b> ${escapeHtml(args.competitorName)}`,
       `<b>Канал:</b> ${sourceLabel(source)}`,
-      `<b>${idField(source)}:</b> ${escapeHtml(args.adId)}`,
+      `<b>${idField(source)}:</b> ${escapeHtml(resolvedId)}`,
       args.startedAt ? `<b>Старт:</b> ${escapeHtml(args.startedAt)}` : '',
       args.lastSeenAt ? `<b>Останній раз бачили:</b> ${escapeHtml(args.lastSeenAt)}` : '', '',
       '<i>Статус визначено після 3 послідовних перевірок, у яких оголошення не було серед активних.</i>',
