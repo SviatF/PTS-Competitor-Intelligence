@@ -1,0 +1,38 @@
+name: Google Ads Production Scanner
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src/dynamicGoogleProductionScan.ts'
+      - 'src/telegram/TelegramNotifier.ts'
+      - 'src/domain/ad.ts'
+      - '.github/workflows/google-ads.yml'
+  schedule:
+    - cron: '*/5 * * * *'
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm install --include=dev
+      - run: npx playwright install --with-deps chromium
+      - name: Scan Google Ads Transparency and notify Telegram
+        run: xvfb-run -a npx tsx src/dynamicGoogleProductionScan.ts
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: google-ads-production
+          path: artifacts/google-production
+          if-no-files-found: ignore
+          retention-days: 3
