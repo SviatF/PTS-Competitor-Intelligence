@@ -40,3 +40,5 @@ jobs:
           path: artifacts/exact-instagram
           if-no-files-found: warn
           retention-days: 3
+
+# exact-account scan trigger
